@@ -459,11 +459,13 @@ class RedditSimulationRunner:
         if llm_base_url:
             os.environ["OPENAI_API_BASE_URL"] = llm_base_url
         
-        print(f"LLM configuration: model={llm_model}, base_url={llm_base_url[:40] if llm_base_url else 'default'}...")
-        
+        llm_timeout = float(os.environ.get("LLM_TIMEOUT", "300"))
+        print(f"LLM configuration: model={llm_model}, base_url={llm_base_url[:40] if llm_base_url else 'default'}, timeout={llm_timeout}s...")
+
         return ModelFactory.create(
             model_platform=ModelPlatformType.OPENAI,
             model_type=llm_model,
+            timeout=llm_timeout,
         )
     
     def _get_active_agents_for_round(
