@@ -102,11 +102,14 @@ class LLMClient:
         Returns:
             Parsed JSON object
         """
+        # Ollama handles JSON mode differently — passing response_format can cause errors.
+        # For Ollama we skip it and rely on the prompt to request JSON output.
+        fmt = None if self._is_ollama() else {"type": "json_object"}
         response = self.chat(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"}
+            response_format=fmt,
         )
         # Clean markdown code block markers
         cleaned_response = response.strip()
