@@ -21,11 +21,12 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: float = 300.0
+        timeout: Optional[float] = None,
     ):
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
+        _timeout = timeout if timeout is not None else Config.LLM_TIMEOUT
 
         if not self.api_key:
             raise ValueError("LLM_API_KEY not configured")
@@ -33,7 +34,7 @@ class LLMClient:
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
-            timeout=timeout,
+            timeout=_timeout,
         )
 
         # Ollama context window size — prevents prompt truncation.

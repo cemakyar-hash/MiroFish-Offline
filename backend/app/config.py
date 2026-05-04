@@ -32,6 +32,13 @@ class Config:
     LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'http://localhost:11434/v1')
     LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'qwen2.5:32b')
 
+    # Timeout: 300s for local Ollama, 60s for cloud APIs. Override via LLM_TIMEOUT.
+    _local_url_hints = ('localhost', '127.0.0.1', 'host.docker.internal')
+    LLM_TIMEOUT = int(os.environ.get(
+        'LLM_TIMEOUT',
+        '300' if any(h in os.environ.get('LLM_BASE_URL', '') for h in _local_url_hints) else '60'
+    ))
+
     # Neo4j configuration
     NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
     NEO4J_USER = os.environ.get('NEO4J_USER', 'neo4j')
