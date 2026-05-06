@@ -18,7 +18,10 @@ from openai import OpenAI
 
 from ..config import Config
 
-logger = logging.getLogger(__name__)
+# Use the configured 'mirofish' logger tree so messages reach stdout via
+# the console handler set up in app/utils/logger.py. Plain getLogger(__name__)
+# attaches to a tree with no handlers and silently drops INFO messages.
+logger = logging.getLogger('mirofish.llm')
 
 
 class LLMClient:
