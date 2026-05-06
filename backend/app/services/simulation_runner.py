@@ -227,6 +227,10 @@ class SimulationRunner:
     
     # Graph memory update configuration
     _graph_memory_enabled: Dict[str, bool] = {}  # simulation_id -> enabled
+
+    # Worker liveness threshold: heartbeat older than this counts as a crash.
+    # 10 min accommodates slow local Qwen persona generation on first round.
+    HEARTBEAT_TIMEOUT_SECONDS = 600
     
     @classmethod
     def get_run_state(cls, simulation_id: str) -> Optional[SimulationRunState]:
@@ -497,6 +501,7 @@ class SimulationRunner:
         twitter_position = 0
         reddit_position = 0
         
+        crashed_by_heartbeat = False
         try:
             while process.poll() is None:  # Process still running
                 # Read Twitter action log
@@ -504,13 +509,30 @@ class SimulationRunner:
                     twitter_position = cls._read_action_log(
                         twitter_actions_log, twitter_position, state, "twitter"
                     )
-                
+
                 # Read Reddit action log
                 if os.path.exists(reddit_actions_log):
                     reddit_position = cls._read_action_log(
                         reddit_actions_log, reddit_position, state, "reddit"
                     )
-                
+
+                # Worker liveness check via heartbeat freshness
+                if not cls.check_worker_health(simulation_id):
+                    logger.warning(
+                        f"[HealthCheck] Sim {simulation_id}: heartbeat stale (>10min), marked as crashed"
+                    )
+                    state.runner_status = RunnerStatus.CRASHED
+                    state.error = "Worker heartbeat timeout (>10min)"
+                    state.twitter_running = False
+                    state.reddit_running = False
+                    cls._save_run_state(state)
+                    crashed_by_heartbeat = True
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                    break
+
                 # Update status
                 cls._save_run_state(state)
                 time.sleep(2)
@@ -522,9 +544,16 @@ class SimulationRunner:
                 cls._read_action_log(reddit_actions_log, reddit_position, state, "reddit")
             
             # Process ended
+            try:
+                process.wait(timeout=5)
+            except Exception:
+                pass
             exit_code = process.returncode
-            
-            if exit_code == 0:
+
+            if crashed_by_heartbeat:
+                # Status already set to CRASHED above; do not overwrite with FAILED.
+                logger.info(f"Simulation crashed (heartbeat timeout): {simulation_id}")
+            elif exit_code == 0:
                 state.runner_status = RunnerStatus.COMPLETED
                 state.completed_at = datetime.now().isoformat()
                 logger.info(f"Simulation completed: {simulation_id}")
@@ -1427,6 +1456,39 @@ class SimulationRunner:
             logger.info(f"[Resume] Sim {sim_id}: orphan detected -> marked interrupted (pid={state.process_pid})")
 
         return interrupted
+
+    @classmethod
+    def check_worker_health(cls, simulation_id: str) -> bool:
+        """
+        Check if a running worker is alive based on heartbeat freshness.
+
+        The worker writes heartbeat.json once per round. If the file is older
+        than HEARTBEAT_TIMEOUT_SECONDS the worker is considered hung/crashed.
+
+        Returns:
+            True if heartbeat is fresh OR has not been written yet (worker
+            still in startup — persona generation can take many minutes
+            before the first round runs).
+            False if heartbeat exists but is stale.
+        """
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        heartbeat_file = os.path.join(sim_dir, "heartbeat.json")
+
+        if not os.path.exists(heartbeat_file):
+            return True
+
+        try:
+            with open(heartbeat_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            ts_str = data.get("timestamp")
+            if not ts_str:
+                return True
+            ts = datetime.fromisoformat(ts_str)
+            age = (datetime.now() - ts).total_seconds()
+            return age < cls.HEARTBEAT_TIMEOUT_SECONDS
+        except (OSError, ValueError, json.JSONDecodeError):
+            # Read race or malformed payload — give benefit of the doubt
+            return True
 
     # ============== Interview functionality ==============
     
