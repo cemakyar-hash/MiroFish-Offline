@@ -60,6 +60,18 @@ def create_app(config_class=Config):
     if should_log_startup:
         logger.info("Simulation process cleanup function registered")
 
+    # Detect orphaned simulations (RUNNING in run_state.json but no live worker)
+    # Runs once per backend boot. Marks them INTERRUPTED so UI shows resume option.
+    if should_log_startup:
+        try:
+            interrupted = SimulationRunner.detect_orphaned_simulations()
+            if interrupted:
+                logger.info(f"[Resume] Detected {len(interrupted)} orphaned simulation(s): {interrupted}")
+            else:
+                logger.info("[Resume] No orphaned simulations found")
+        except Exception as e:
+            logger.error(f"[Resume] Orphan detection failed: {e}")
+
     # Request logging middleware
     @app.before_request
     def log_request():

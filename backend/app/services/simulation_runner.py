@@ -42,6 +42,8 @@ class RunnerStatus(str, Enum):
     STOPPED = "stopped"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"  # Backend was restarted while simulation was running
+    CRASHED = "crashed"           # Worker heartbeat went stale (no progress for >10min)
 
 
 @dataclass
@@ -1365,7 +1367,67 @@ class SimulationRunner:
             if process.poll() is None:
                 running.append(sim_id)
         return running
-    
+
+    @classmethod
+    def _pid_alive(cls, pid: int) -> bool:
+        """Cross-platform check if a PID is alive (zero-signal probe)."""
+        if not pid or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # Process exists but we don't own it — still counts as alive
+            return True
+        except OSError:
+            return False
+
+    @classmethod
+    def detect_orphaned_simulations(cls) -> List[str]:
+        """
+        Scan run_state.json files on disk and mark sims as INTERRUPTED if they
+        claim RUNNING/STARTING but no live process backs them.
+
+        Called once at backend startup so the UI doesn't show stale "running" sims
+        after a backend restart.
+
+        Returns:
+            List of simulation IDs marked as interrupted
+        """
+        if not os.path.isdir(cls.RUN_STATE_DIR):
+            return []
+
+        interrupted = []
+        active_states = {RunnerStatus.RUNNING, RunnerStatus.STARTING}
+
+        for sim_id in os.listdir(cls.RUN_STATE_DIR):
+            sim_dir = os.path.join(cls.RUN_STATE_DIR, sim_id)
+            state_file = os.path.join(sim_dir, "run_state.json")
+            if not os.path.isfile(state_file):
+                continue
+
+            state = cls._load_run_state(sim_id)
+            if not state or state.runner_status not in active_states:
+                continue
+
+            if cls._pid_alive(state.process_pid):
+                # Worker actually still running (e.g. backend reloaded but worker
+                # subprocess survived). Leave state alone.
+                continue
+
+            state.runner_status = RunnerStatus.INTERRUPTED
+            state.twitter_running = False
+            state.reddit_running = False
+            state.error = "Backend restarted while simulation was running"
+            state.updated_at = datetime.now().isoformat()
+            cls._save_run_state(state)
+            interrupted.append(sim_id)
+            logger.info(f"[Resume] Sim {sim_id}: orphan detected -> marked interrupted (pid={state.process_pid})")
+
+        return interrupted
+
     # ============== Interview functionality ==============
     
     @classmethod
