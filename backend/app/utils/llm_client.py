@@ -2,15 +2,23 @@
 LLM Client Wrapper
 Unified OpenAI format API calls
 Supports Ollama num_ctx parameter to prevent prompt truncation
+
+Profiles:
+- "default": uses LLM_* env vars (typically local Ollama for high-volume calls)
+- "cloud":   uses LLM_CLOUD_* env vars (quality-critical low-volume calls).
+             Falls back to default if LLM_CLOUD_API_KEY is unset.
 """
 
 import json
+import logging
 import os
 import re
 from typing import Optional, Dict, Any, List
 from openai import OpenAI
 
 from ..config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -22,11 +30,22 @@ class LLMClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         timeout: Optional[float] = None,
+        profile: str = "default",
     ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model = model or Config.LLM_MODEL_NAME
-        _timeout = timeout if timeout is not None else Config.LLM_TIMEOUT
+        use_cloud = profile == "cloud" and Config.LLM_CLOUD_API_KEY
+        if use_cloud:
+            self.api_key = api_key or Config.LLM_CLOUD_API_KEY
+            self.base_url = base_url or Config.LLM_CLOUD_BASE_URL or Config.LLM_BASE_URL
+            self.model = model or Config.LLM_CLOUD_MODEL_NAME or Config.LLM_MODEL_NAME
+            _timeout = timeout if timeout is not None else Config.LLM_CLOUD_TIMEOUT
+            self.profile = "cloud"
+        else:
+            self.api_key = api_key or Config.LLM_API_KEY
+            self.base_url = base_url or Config.LLM_BASE_URL
+            self.model = model or Config.LLM_MODEL_NAME
+            _timeout = timeout if timeout is not None else Config.LLM_TIMEOUT
+            # If caller asked for cloud but it isn't configured, surface that
+            self.profile = "default(cloud-fallback)" if profile == "cloud" else "default"
 
         if not self.api_key:
             raise ValueError("LLM_API_KEY not configured")
@@ -35,6 +54,11 @@ class LLMClient:
             api_key=self.api_key,
             base_url=self.base_url,
             timeout=_timeout,
+        )
+
+        logger.info(
+            f"[LLM] Profile={self.profile}, Endpoint={self.base_url}, "
+            f"Model={self.model}, Timeout={int(_timeout)}s"
         )
 
         # Ollama context window size — prevents prompt truncation.

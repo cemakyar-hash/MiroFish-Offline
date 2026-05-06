@@ -39,6 +39,15 @@ class Config:
         '300' if any(h in os.environ.get('LLM_BASE_URL', '') for h in _local_url_hints) else '60'
     ))
 
+    # Cloud LLM profile (optional) — used by quality-critical, low-volume calls
+    # like ontology generation and report writing. High-volume calls (personas,
+    # agent actions) keep using the default LLM_* config (typically local Ollama).
+    # If LLM_CLOUD_API_KEY is unset, cloud-profile clients fall back to the default.
+    LLM_CLOUD_API_KEY = os.environ.get('LLM_CLOUD_API_KEY')
+    LLM_CLOUD_BASE_URL = os.environ.get('LLM_CLOUD_BASE_URL')
+    LLM_CLOUD_MODEL_NAME = os.environ.get('LLM_CLOUD_MODEL_NAME')
+    LLM_CLOUD_TIMEOUT = int(os.environ.get('LLM_CLOUD_TIMEOUT', '120'))
+
     # Neo4j configuration
     NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
     NEO4J_USER = os.environ.get('NEO4J_USER', 'neo4j')
