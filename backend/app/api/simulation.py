@@ -3,6 +3,7 @@ Simulation-related API routes
 Step2: Entity reading and filtering, OASIS simulation preparation and execution (fully automated)
 """
 
+import json
 import os
 import traceback
 from flask import request, jsonify, send_file, current_app
@@ -1634,6 +1635,110 @@ def start_simulation():
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+
+@simulation_bp.route('/<simulation_id>/resume', methods=['POST'])
+def resume_simulation(simulation_id: str):
+    """
+    Resume an interrupted simulation.
+
+    Picks up sims that are INTERRUPTED (backend restart) or CRASHED
+    (worker heartbeat went stale). The worker process restarts from round 0,
+    but on-disk artifacts (DBs, profiles, ontology, action logs) are preserved
+    so reports keep their full history.
+
+    Path:
+        simulation_id: Simulation ID
+
+    Body (optional JSON):
+        {
+            "platform": "twitter|reddit|parallel",  // override platform from prior run
+            "max_rounds": 100                       // override max_rounds
+        }
+
+    Returns:
+        {"success": true, "data": <run_state.to_dict()>, "resumed_from": "<prev_status>"}
+    """
+    try:
+        run_state = SimulationRunner.get_run_state(simulation_id)
+        if not run_state:
+            return jsonify({"success": False, "error": f"Simulation does not exist: {simulation_id}"}), 404
+
+        resumable = {RunnerStatus.INTERRUPTED, RunnerStatus.CRASHED, RunnerStatus.FAILED, RunnerStatus.STOPPED}
+        if run_state.runner_status not in resumable:
+            return jsonify({
+                "success": False,
+                "error": f"Simulation is not resumable (current status: {run_state.runner_status.value}). "
+                         f"Resumable states: {[s.value for s in resumable]}"
+            }), 400
+
+        body = request.get_json(silent=True) or {}
+
+        # Recover platform from prior run, allow body override
+        platform = body.get('platform')
+        if not platform:
+            twitter = run_state.twitter_running or run_state.twitter_completed or run_state.twitter_actions_count > 0
+            reddit = run_state.reddit_running or run_state.reddit_completed or run_state.reddit_actions_count > 0
+            if twitter and reddit:
+                platform = 'parallel'
+            elif reddit:
+                platform = 'reddit'
+            else:
+                platform = 'twitter'  # safe default — most common
+
+        if platform not in ('twitter', 'reddit', 'parallel'):
+            return jsonify({"success": False, "error": f"Invalid platform: {platform}"}), 400
+
+        # Recover max_rounds from prior config, allow body override
+        max_rounds = body.get('max_rounds')
+        if max_rounds is None and run_state.total_rounds > 0:
+            max_rounds = run_state.total_rounds
+        if max_rounds is not None:
+            try:
+                max_rounds = int(max_rounds)
+                if max_rounds <= 0:
+                    max_rounds = None
+            except (ValueError, TypeError):
+                max_rounds = None
+
+        prev_status = run_state.runner_status.value
+        logger.info(f"[Resume] Sim {simulation_id}: status {prev_status} -> ready, restart worker (platform={platform}, max_rounds={max_rounds})")
+
+        # Reset SimulationManager state to READY (start_simulation expects it)
+        manager = SimulationManager()
+        sim_state = manager.get_simulation(simulation_id)
+        if sim_state:
+            sim_state.status = SimulationStatus.READY
+            manager._save_simulation_state(sim_state)
+
+        # Resume = relaunch worker without cleanup_simulation_logs.
+        # On-disk DBs, action logs, profiles, ontology stay untouched.
+        # Note: run_twitter_simulation.py wipes its own .db at start (line 589),
+        # which is acceptable per Cem's spec ("Neustart von Round 0 mit History-Erhalt").
+        new_run_state = SimulationRunner.start_simulation(
+            simulation_id=simulation_id,
+            platform=platform,
+            max_rounds=max_rounds,
+            enable_graph_memory_update=False,
+        )
+
+        if sim_state:
+            sim_state.status = SimulationStatus.RUNNING
+            manager._save_simulation_state(sim_state)
+
+        response = new_run_state.to_dict()
+        response['resumed_from'] = prev_status
+        response['platform'] = platform
+        if max_rounds:
+            response['max_rounds_applied'] = max_rounds
+
+        return jsonify({"success": True, "data": response})
+
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"[Resume] Failed for {simulation_id}: {e}")
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @simulation_bp.route('/stop', methods=['POST'])
