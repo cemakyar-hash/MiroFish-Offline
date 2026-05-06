@@ -162,7 +162,8 @@ class OntologyGenerator:
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
-        self.llm_client = llm_client or LLMClient()
+        # Cloud profile: ontology is low-volume but quality-critical
+        self.llm_client = llm_client or LLMClient(profile="cloud")
 
     def generate(
         self,
