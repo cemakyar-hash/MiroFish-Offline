@@ -130,6 +130,8 @@ except ImportError as e:
     print("Please install first: pip install oasis-ai camel-ai")
     sys.exit(1)
 
+from action_logger import write_heartbeat
+
 
 # IPC-related constants
 IPC_COMMANDS_DIR = "ipc_commands"
@@ -626,6 +628,9 @@ class RedditSimulationRunner:
         start_time = datetime.now()
         
         for round_num in range(total_rounds):
+            # Heartbeat: lets backend health-check detect crashed workers
+            write_heartbeat(self.simulation_dir, round_num, total_rounds, platform="reddit")
+
             simulated_minutes = round_num * minutes_per_round
             simulated_hour = (simulated_minutes // 60) % 24
             simulated_day = simulated_minutes // (60 * 24) + 1

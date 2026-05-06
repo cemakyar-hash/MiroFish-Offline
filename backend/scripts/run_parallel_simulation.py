@@ -155,7 +155,7 @@ def init_logging_for_simulation(simulation_dir: str):
         shutil.rmtree(old_log_dir, ignore_errors=True)
 
 
-from action_logger import SimulationLogManager, PlatformActionLogger
+from action_logger import SimulationLogManager, PlatformActionLogger, write_heartbeat
 
 try:
     from camel.models import ModelFactory
@@ -1226,8 +1226,11 @@ async def run_twitter_simulation(
             log_info(f"Rounds truncated: {original_rounds} -> {total_rounds} (max_rounds={max_rounds})")
     
     start_time = datetime.now()
-    
+
     for round_num in range(total_rounds):
+        # Heartbeat: lets backend health-check detect crashed workers
+        write_heartbeat(simulation_dir, round_num, total_rounds, platform=None)
+
         # Check if received exit signal
         if _shutdown_event and _shutdown_event.is_set():
             if main_logger:
@@ -1425,8 +1428,11 @@ async def run_reddit_simulation(
             log_info(f"Rounds truncated: {original_rounds} -> {total_rounds} (max_rounds={max_rounds})")
     
     start_time = datetime.now()
-    
+
     for round_num in range(total_rounds):
+        # Heartbeat: lets backend health-check detect crashed workers
+        write_heartbeat(simulation_dir, round_num, total_rounds, platform=None)
+
         # Check if received exit signal
         if _shutdown_event and _shutdown_event.is_set():
             if main_logger:

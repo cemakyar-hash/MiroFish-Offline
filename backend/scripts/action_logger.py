@@ -9,6 +9,7 @@ Log structure:
     ├── reddit/
     │   └── actions.jsonl    # Reddit platform action log
     ├── simulation.log       # Main simulation process log
+    ├── heartbeat.json       # Worker liveness probe (written per round)
     └── run_state.json       # Run state (for API queries)
 """
 
@@ -17,6 +18,49 @@ import os
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
+
+
+def write_heartbeat(
+    simulation_dir: str,
+    round_num: int,
+    total_rounds: int,
+    platform: Optional[str] = None,
+) -> None:
+    """
+    Write a heartbeat file so the backend can detect crashed workers.
+
+    Called once per round by the worker. The backend health-check
+    (SimulationRunner.check_worker_health) treats a heartbeat older than
+    600s as a crash signal.
+
+    Atomic write via os.replace so a partial read never sees a half-written file.
+
+    Args:
+        simulation_dir: Simulation working directory
+        round_num: Current round (0-based)
+        total_rounds: Total rounds planned
+        platform: "twitter", "reddit", or None for parallel
+    """
+    payload = {
+        "timestamp": datetime.now().isoformat(),
+        "pid": os.getpid(),
+        "round": round_num,
+        "total_rounds": total_rounds,
+        "platform": platform,
+    }
+    target = os.path.join(simulation_dir, "heartbeat.json")
+    tmp = target + ".tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, target)
+    except OSError:
+        # Heartbeat is best-effort — never crash the worker for a write failure
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 class PlatformActionLogger:
