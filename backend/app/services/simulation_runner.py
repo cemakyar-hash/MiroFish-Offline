@@ -527,10 +527,26 @@ class SimulationRunner:
                     state.reddit_running = False
                     cls._save_run_state(state)
                     crashed_by_heartbeat = True
+                    # Bare terminate() is too weak — workers stuck in C extensions
+                    # (e.g. requests on a hung socket) ignore SIGTERM. Use the
+                    # process-group killer with SIGKILL escalation.
                     try:
-                        process.terminate()
-                    except Exception:
-                        pass
+                        cls._terminate_process(process, simulation_id, timeout=10)
+                    except Exception as e:
+                        logger.error(f"Failed to terminate crashed worker {simulation_id}: {e}")
+                    # Sync user-facing SimulationState so list view reflects the crash.
+                    # Lazy import avoids circular dependency at module load.
+                    try:
+                        from .simulation_manager import SimulationManager, SimulationStatus
+                        manager = SimulationManager()
+                        sim_state = manager.get_simulation(simulation_id)
+                        if sim_state:
+                            sim_state.status = SimulationStatus.FAILED
+                            sim_state.current_round = state.current_round
+                            sim_state.error = "Worker heartbeat timeout (>10min)"
+                            manager._save_simulation_state(sim_state)
+                    except Exception as e:
+                        logger.error(f"Failed to sync SimulationState on crash {simulation_id}: {e}")
                     break
 
                 # Update status
