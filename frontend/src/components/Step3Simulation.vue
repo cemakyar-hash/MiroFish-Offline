@@ -91,13 +91,25 @@
       </div>
 
       <div class="action-controls">
-        <button 
+        <button
+          v-if="phase === 3"
+          class="action-btn primary"
+          :disabled="isResuming"
+          @click="doResumeSimulation"
+          :title="`Previous status: ${resumableStatus}. Restarts worker; on-disk artifacts preserved.`"
+        >
+          <span v-if="isResuming" class="loading-spinner-small"></span>
+          {{ isResuming ? 'Resuming...' : `Resume (was ${resumableStatus})` }}
+          <span v-if="!isResuming" class="arrow-icon">↻</span>
+        </button>
+        <button
+          v-else
           class="action-btn primary"
           :disabled="phase !== 2 || isGeneratingReport"
           @click="handleNextStep"
         >
           <span v-if="isGeneratingReport" class="loading-spinner-small"></span>
-          {{ isGeneratingReport ? 'Starting...' : 'Start Generating Report' }} 
+          {{ isGeneratingReport ? 'Starting...' : 'Start Generating Report' }}
           <span v-if="!isGeneratingReport" class="arrow-icon">→</span>
         </button>
       </div>
@@ -288,10 +300,11 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { 
-  startSimulation, 
+import {
+  startSimulation,
   stopSimulation,
-  getRunStatus, 
+  resumeSimulation,
+  getRunStatus,
   getRunStatusDetail
 } from '../api/simulation'
 import { generateReport } from '../api/report'
@@ -314,9 +327,11 @@ const router = useRouter()
 
 // State
 const isGeneratingReport = ref(false)
-const phase = ref(0) // 0: Not started, 1: Running, 2: Completed
+const phase = ref(0) // 0: Not started, 1: Running, 2: Completed, 3: Resumable (interrupted/crashed/failed/stopped)
 const isStarting = ref(false)
 const isStopping = ref(false)
+const isResuming = ref(false)
+const resumableStatus = ref(null) // The previous status when resumable (e.g. "interrupted")
 const startError = ref(null)
 const runStatus = ref({})
 const allActions = ref([]) // All actions (incremental accumulation)
@@ -684,11 +699,83 @@ watch(() => props.systemLogs?.length, () => {
   })
 })
 
-onMounted(() => {
-  addLog('Step3 Simulation initialization')
-  if (props.simulationId) {
+// Resume an interrupted/crashed/failed/stopped simulation
+const doResumeSimulation = async () => {
+  if (!props.simulationId) return
+
+  isResuming.value = true
+  startError.value = null
+  addLog(`Resuming simulation (was ${resumableStatus.value})...`)
+  emit('update-status', 'processing')
+
+  try {
+    const res = await resumeSimulation(props.simulationId)
+    if (res.success && res.data) {
+      addLog(`✓ Simulation resumed (was ${res.data.resumed_from || resumableStatus.value})`)
+      addLog(`  ├─ PID: ${res.data.process_pid || '-'}`)
+      phase.value = 1
+      runStatus.value = res.data
+      resumableStatus.value = null
+      startStatusPolling()
+      startDetailPolling()
+    } else {
+      startError.value = res.error || 'Resume failed'
+      addLog(`✗ Resume failed: ${res.error || 'Unknown error'}`)
+      emit('update-status', 'error')
+    }
+  } catch (err) {
+    startError.value = err.message
+    addLog(`✗ Resume exception: ${err.message}`)
+    emit('update-status', 'error')
+  } finally {
+    isResuming.value = false
+  }
+}
+
+// Decide on mount: auto-start, show resume button, or treat as completed
+const initFromBackendState = async () => {
+  if (!props.simulationId) return
+
+  try {
+    const res = await getRunStatus(props.simulationId)
+    const status = res?.data?.runner_status
+    const resumableStates = ['interrupted', 'crashed', 'failed', 'stopped']
+
+    if (resumableStates.includes(status)) {
+      addLog(`Detected previous simulation status: ${status} — waiting for user to resume`)
+      resumableStatus.value = status
+      runStatus.value = res.data
+      phase.value = 3
+      return
+    }
+
+    if (status === 'running' || status === 'starting') {
+      addLog('Simulation already running on backend — attaching to live status')
+      phase.value = 1
+      runStatus.value = res.data
+      startStatusPolling()
+      startDetailPolling()
+      return
+    }
+
+    if (status === 'completed') {
+      addLog('Simulation already completed on backend')
+      phase.value = 2
+      runStatus.value = res.data
+      return
+    }
+
+    // idle / unknown — fresh start
+    doStartSimulation()
+  } catch (err) {
+    console.warn('initFromBackendState failed, falling back to fresh start:', err)
     doStartSimulation()
   }
+}
+
+onMounted(() => {
+  addLog('Step3 Simulation initialization')
+  initFromBackendState()
 })
 
 onUnmounted(() => {

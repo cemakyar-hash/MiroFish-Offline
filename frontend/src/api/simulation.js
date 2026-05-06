@@ -93,6 +93,17 @@ export const stopSimulation = (data) => {
 }
 
 /**
+ * Resume an interrupted/crashed/failed/stopped simulation.
+ * Worker restarts at round 0 but on-disk artifacts (DBs, profiles, ontology,
+ * action logs) are preserved.
+ * @param {string} simulationId
+ * @param {Object} [data] - optional { platform?, max_rounds? } overrides
+ */
+export const resumeSimulation = (simulationId, data = {}) => {
+  return service.post(`/api/simulation/${simulationId}/resume`, data)
+}
+
+/**
  * Get simulation real-time run status
  * @param {string} simulationId
  */
